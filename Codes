@@ -1,0 +1,262 @@
+
+
+
+var BM = BM
+
+//  Soil Depth SLGA: Soil and Landscape Grid of BM (Soil Attributes)
+var dataset = ee.ImageCollection("CSIRO/SLGA")
+var dataset = dataset.filter(ee.Filter.eq('attribute_code', 'SOC'));
+//print(dataset)
+var soilcarbon = dataset.select('SOC_000_005_EV').mosaic().clip(BM);
+
+Map.addLayer(soilcarbon,Vis,'Soil Carbon in the Blue Mountains Area',0)
+
+//__ Vector mask of carbon areas_________________________________
+// Carbon value more than 5 which is considered a burnt Areas
+var CarbonValue = 4.5;
+var Carbon_mask = soilcarbon.gt(CarbonValue);
+var Carbon_mask = Carbon_mask.updateMask(Carbon_mask.eq(1));
+var Carbon_mask = Carbon_mask.eq(Carbon_mask).rename('S2_alert')
+var Carbon_vectors = Carbon_mask.addBands(soilcarbon).reduceToVectors({
+  geometry: BM,
+  crs: soilcarbon.projection(),
+  scale: 10,
+  geometryType: 'polygon',
+  eightConnected: false,
+  reducer: ee.Reducer.mean(),
+  maxPixels: 50000000000});
+Map.addLayer(Carbon_vectors.draw({color: 'red', strokeWidth: 1}), {},'Threshold Areas Carbon', 0);
+var areas = function(feature) {var area = feature.geometry().area(10);
+  return feature.set('area', area);};
+  
+var CarbonAreas = Carbon_vectors.map(areas);  
+var CarbonAreasFilter= CarbonAreas.filter(ee.Filter.gt('area', 2500));
+//Map.addLayer(FIRMS_vector,{color: '000839', strokeWidth: 3}, 'FIRMS Monthly vector',0);
+Map.addLayer(CarbonAreasFilter.draw({color: 'blue', strokeWidth: 1}), {},'Carbon Areas Filter 2500', 0);  
+ 
+var CarbonRandomPoints = ee.FeatureCollection.randomPoints(CarbonAreasFilter,300);
+var getProperties = function(feature) {var point = feature.geometry();
+  return ee.Feature(point).set('Carbon',1)};
+
+var CarbonRandomPointsPro = CarbonRandomPoints.map(getProperties); 
+Map.addLayer(CarbonRandomPointsPro, {color: 'green', strokeWidth: 1},'Carbon Random Points',0);
+
+//___LOW_Carbon_____
+// Carbon value more than 5 which is considered a burnt Areas
+var CarbonValue = 4.5;
+var Carbon_mask = soilcarbon.lt(CarbonValue);
+var Carbon_mask = Carbon_mask.updateMask(Carbon_mask.eq(1));
+var Carbon_mask = Carbon_mask.eq(Carbon_mask).rename('S2_alert')
+var Carbon_vectors = Carbon_mask.addBands(soilcarbon).reduceToVectors({
+  geometry: BM,
+  crs: soilcarbon.projection(),
+  scale: 10,
+  geometryType: 'polygon',
+  eightConnected: false,
+  reducer: ee.Reducer.mean(),
+  maxPixels: 50000000000});
+Map.addLayer(Carbon_vectors.draw({color: 'red', strokeWidth: 1}), {},'Threshold Areas Low Carbon', 0);
+var areas = function(feature) {var area = feature.geometry().area(10);
+  return feature.set('area', area);};
+  
+var CarbonAreas = Carbon_vectors.map(areas);  
+var CarbonAreasFilter= CarbonAreas.filter(ee.Filter.gt('area', 2500));
+//Map.addLayer(FIRMS_vector,{color: '000839', strokeWidth: 3}, 'FIRMS Monthly vector',0);
+Map.addLayer(CarbonAreasFilter.draw({color: 'red', strokeWidth: 1}), {},'Low Carbon Areas Filter 2500', 0);  
+//Random Point of low carbon
+var LowCarbonRandomPoints = ee.FeatureCollection.randomPoints(CarbonAreasFilter,300);
+var getProperties = function(feature) {var point = feature.geometry();
+  return ee.Feature(point).set('Carbon',0)};
+
+var LowCarbonRandomPointsPro = LowCarbonRandomPoints.map(getProperties); 
+Map.addLayer(LowCarbonRandomPointsPro, {color: 'red', strokeWidth: 1},'Low Carbon Random Points',0);
+
+//_____Merge Training Points______________________________-
+var trainingdata = CarbonRandomPointsPro.merge(LowCarbonRandomPointsPro);
+//print(trainingdata);
+
+////_________ML________________/////______VARIABLES___________
+
+// LandCover 
+var LandCover =ee.ImageCollection("COPERNICUS/Landcover/100m/Proba-V/Global")
+var LandCover = LandCover.select('discrete_classification').mosaic().clip(BM);
+
+//  30mTographical data processing for land cover classification
+var srtm = ee.Image('USGS/SRTMGL1_003');
+var srtm = srtm.clip(BM)
+var elevation = srtm.select('elevation');
+var slope = ee.Terrain.slope(elevation);
+var aspect = ee.Terrain.aspect(elevation);
+
+
+//  Population WorldPop Global Project Population Data 100m
+var dataset = ee.ImageCollection("WorldPop/GP/100m/pop").filterDate('2019');
+var pop_100m = dataset.select('population');
+var pop_100m = pop_100m.mosaic().clip(BM) 
+
+
+//  Human Modification - 1km
+//https://developers.google.com/earth-engine/datasets/catalog/CSP_HM_GlobalHumanModification#description
+var GHM = ee.ImageCollection("CSP/HM/GlobalHumanModification")
+var GHM_index = GHM.mean().clip(BM)
+
+// S2 NDVI 250m
+//var dataset = ee.ImageCollection('MODIS/006/MOD13Q1').filter(ee.Filter.date('2019-11-01', '2020-02-01'));
+//var ndvi = dataset.select('NDVI').mean().clip(BM);
+var dataset = ee.ImageCollection('COPERNICUS/S2_SR').filter(ee.Filter.date('2019-11-01', '2020-02-01'));
+var addNDVI = function(image){
+  var ndvi = image.normalizedDifference(['B8','B4']). rename('NDVI');
+  return image.addBands(ndvi);
+}
+var dataset = dataset.map(addNDVI)
+var ndvi = dataset.select('NDVI').mean().clip(BM);
+//var ndviVis = { min: 0.0, max: 8000.0,palette: ['FFFFFF', 'CE7E45', 'DF923D', 'F1B555', 'FCD163', '99B718', '74A901',
+//    '66A000', '529400', '3E8601', '207401', '056201', '004C00', '023B01', '012E01', '011D01', '011301'],};
+//Map.addLayer(ndvi, ndviVis, 'NDVI 250 MODIS',0);
+
+//  Soil Depth SLGA: Soil and Landscape Grid of BM (Soil Attributes)
+// 90m Depth of soil profile (A & B horizons)
+var dataset = ee.ImageCollection('CSIRO/SLGA').filter(ee.Filter.eq('attribute_code', 'DES'));
+var soilDepth = dataset.select('DES_000_200_EV').mosaic().clip(BM);
+
+
+// Climate - WIND SPEED 2.5 arc minutes more then 2km
+var vs = ee.ImageCollection('IDAHO_EPSCOR/TERRACLIMATE').filter(ee.Filter.date('2019-11-01', '2020-02-01'));
+var vs = vs.select('vs').reduce(ee.Reducer.mean()).clip(BM);
+
+
+//  Maximum temperature  
+//https://developers.google.com/earth-engine/datasets/catalog/IDAHO_EPSCOR_TERRACLIMATE#description
+var temp_max = ee.ImageCollection('IDAHO_EPSCOR/TERRACLIMATE').filter(ee.Filter.date('2019-11-01', '2020-02-01'));
+var temp_max = temp_max.select('tmmx').reduce(ee.Reducer.mean()).clip(BM);
+
+
+//  Palmer Drought Severity 
+var Drought_Palmer= ee.ImageCollection('IDAHO_EPSCOR/TERRACLIMATE').filter(ee.Filter.date('2019-11-01', '2020-02-01'));
+var Drought_Index = Drought_Palmer.select('pdsi').reduce(ee.Reducer.mean()).clip(BM);
+
+// Precipitation accumulation https://developers.google.com/earth-engine/datasets/catalog/IDAHO_EPSCOR_TERRACLIMATE#description
+var Precipitation= ee.ImageCollection('IDAHO_EPSCOR/TERRACLIMATE').filter(ee.Filter.date('2019-11-01', '2020-02-01'));
+var Precipitation = Precipitation.select('pr').reduce(ee.Reducer.mean()).clip(BM);
+
+
+// Soil Moisture 
+var Soil_Moisture= ee.ImageCollection('IDAHO_EPSCOR/TERRACLIMATE').filter(ee.Filter.date('2019-09-01', '2019-10-31'));
+var Soil_Moisture = Soil_Moisture.select('soil').reduce(ee.Reducer.mean()).clip(BM);
+
+
+
+//______M E R G E ____ A L L___ V A R I A B L E S 
+var merge = LandCover.addBands(elevation).addBands(slope).addBands(aspect).addBands(GHM_index)
+      .addBands(pop_100m).addBands(Soil_Moisture)
+      .addBands(ndvi).addBands(soilDepth).addBands(vs).addBands(temp_max).addBands(Drought_Index)
+      .addBands(Precipitation);
+var merge = merge.select(
+['discrete_classification', 'elevation', 'slope', 'aspect', 'gHM', 
+'population', 'soil_mean', 'NDVI', 'DES_000_200_EV',
+'vs_mean', 'tmmx_mean', 'pdsi_mean', 'pr_mean'],
+['Land Cover', 'Elevation', 'Slope', 'Aspect', 'Global Human Modification',
+'Population', 'Soil Moisture',  'NDVI',
+'Soil Depth', 'Wind Speed', 'Temperature', 'Drought','Precipitation'])
+
+var bands= ['Land Cover', 'Elevation', 'Slope', 'Aspect', 'Global Human Modification', 'Population', 'Soil Moisture'
+, 'NDVI', 'Soil Depth', 'Wind Speed', 'Temperature', 'Drought','Precipitation'];
+
+//__________________ML Algorithms__________________________________
+// Make a Random Forest classifier and train it.
+var point = trainingdata
+
+// Sample the input imagery to get a FeatureCollection of training data.
+var classifierTraining = merge.sampleRegions(
+            {collection: point,
+            properties: ['Carbon'],
+            scale: 500});
+                  
+var RF_classifier = ee.Classifier.smileRandomForest(300).train(
+                    {features:classifierTraining,
+                    classProperty:'Carbon',inputProperties: bands});
+                    
+var classification = merge.classify(RF_classifier);
+
+
+Map.addLayer(classification, {min: 0, max: 1, palette: ['green', 'red']},'classification', 0);    
+//print('Number of trained samples: ', classifierTraining.size()) 
+
+var RF_Classsifier = ee.Classifier.smileRandomForest(300).setOutputMode('PROBABILITY')
+                    .train(classifierTraining,"Carbon");                     
+var RF_Classs_Pro= merge.classify(RF_Classsifier);
+//Map.addLayer(RF_Classs_Pro, {min: 0, max: 1, palette: ['green', 'red']},'classification_Pro', 0);    
+//print(classifierTraining.size()) // 590               
+var classifier_REG = ee.Classifier.smileRandomForest(300).setOutputMode('REGRESSION').train(classifierTraining,"fire"); 
+var classification_REG = merge.classify(classifier_REG);
+//Map.addLayer(classification_REG, {min: 0, max: 1, palette: ['green', 'red']},'classification_REG', 0);
+
+////____TESTING_____/////
+var split = 0.7;  //  70% training, 30% testing.
+var classifierTraining= classifierTraining.randomColumn();
+var trained = classifierTraining.filter(ee.Filter.lt('random', split));
+var test = classifierTraining.filter(ee.Filter.gte('random', split));
+//print('Number of training dataset: ', trained.size())
+//print('Number of test dataset: ', test.size())
+
+
+var classifier_trained = ee.Classifier.smileRandomForest(1000).train
+                          ({features:trained,
+                          classProperty:'Carbon',
+                          inputProperties: bands});
+                          
+var test_classification = test.classify(classifier_trained)
+var confusionMatrix =test_classification.errorMatrix('Carbon','classification');    
+var confusionMatrixArray = ee.Feature(null, {matrix: confusionMatrix.array()});
+print('Confusion Matrix:', confusionMatrixArray);
+var overAccuracy = ee.Feature(null, {matrix: confusionMatrix.accuracy()});
+print('Overal Accuracy:', overAccuracy)
+var kappa = ee.Feature(null, {matrix: confusionMatrix.kappa()});
+print(' kappa:', kappa);
+
+///____PRO_MAP_____________________________
+var Pro ='<RasterSymbolizer>'+
+      '<ColorMap type = "intervals" extended="true" >' +
+      '<ColorMapEntry color="#2e651b" quantity="0" label="0.20"/>' +  
+      '<ColorMapEntry color="#55a13b" quantity="0.21" label="0.40"/>' +  
+      '<ColorMapEntry color="#e5ee5a" quantity="0.41" label="0.60"/>' +    
+      '<ColorMapEntry color="#d39b56" quantity="0.61" label="0.80"/>' +    
+      '<ColorMapEntry color="#f62008" quantity="0.81" label="0.9999"/>' +
+      '<ColorMapEntry color="#f62008" quantity="0.99991" label="0.99999"/>' +
+    '</ColorMap>' +
+  '</RasterSymbolizer>';
+Map.addLayer(RF_Classs_Pro.sldStyle(Pro), {}, 'classifier_legend',0);
+
+var legend = ui.Panel({style: {position: 'middle-right',padding: '8px 15px'}});
+var legendTitle = ui.Label({value: 'Soil Carbon Content',style: {fontWeight: 'bold' ,fontSize: '12px', margin: '2px',padding: '2px'}});
+legend.add(legendTitle);
+
+//_______Creates and styles 1 row of the legend______________________
+var Row = function(color, name) 
+      {var colorBox = ui.Label({style: { backgroundColor: color, padding: '8px', margin: '0 0 4px 0'}});
+      var description = ui.Label({value: name,style: {margin: '0 0 2px 3px'}});
+      return ui.Panel({widgets: [colorBox, description],layout: ui.Panel.Layout.Flow('horizontal')})};
+
+var palette =['#2e651b', '#55a13b', '#e5ee5a', '#d39b56', '#f62008'];
+
+var names = ['Very Low (0% - 20%)',' Low (21% - 40%)','Medium (41% - 60%)', 'High (61% - 80%)','Very High (80% - 100%)']
+
+for (var i = 0; i <5; i++) {
+  legend.add(Row(palette[i], names[i]));}  
+Map.add(legend);
+
+
+//____V A R I A B L E______ I M P O R T A N C E_____________________________________    
+var RF_Classsifier_explain = RF_Classsifier.explain();
+print('Explain:',RF_Classsifier_explain);
+var variable_importance = ee.Feature(null, ee.Dictionary(RF_Classsifier_explain)
+                          .get('importance'));
+
+var chart = ui.Chart.feature.byProperty(variable_importance).setChartType('ColumnChart')
+            .setOptions({title: 'Random Forest Variable Importance',
+              legend: {position: 'none'},
+              hAxis: {title: 'Bands'},
+              vAxis: {title: 'Importance'},
+              colors: ['2e651b']});
+
+print(chart);
